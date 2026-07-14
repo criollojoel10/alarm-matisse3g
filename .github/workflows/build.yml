@@ -11,13 +11,13 @@ on:
       lk2nd_version:
         description: 'lk2nd version tag'
         required: false
-        default: 'v0.15.0'
+        default: '22.0'
 
 env:
   RELEASE_TAG: v$(date +'%Y%m%d')
   KERNEL_REPO: msm8226-mainline/linux
   KERNEL_REF: ${{ github.event.inputs.kernel_ref || 'qcom-msm8226-6.16.y' }}
-  LK2ND_TAG: ${{ github.event.inputs.lk2nd_version || 'v0.15.0' }}
+  LK2ND_TAG: ${{ github.event.inputs.lk2nd_version || '22.0' }}
   ROOTFS_URL: http://os.archlinuxarm.org/os/ArchLinuxARM-armv7-latest.tar.gz
 
 jobs:
@@ -43,6 +43,18 @@ jobs:
         run: |
           git clone --depth=1 --branch=${{ env.KERNEL_REF }} \
             https://github.com/${{ env.KERNEL_REPO }}.git linux
+
+      - name: Apply matisse3g DTS patch
+        run: |
+          # Add SM-T531 (matisse3g) device tree — not yet merged upstream
+          # This creates qcom-msm8226-samsung-matisse3g.dtb for MSM8226+3G modem
+          if [ -f kernel/dts-patches/0001-add-matisse3g-dts.patch ]; then
+            cd linux
+            git apply ../kernel/dts-patches/0001-add-matisse3g-dts.patch
+            echo "matisse3g DTS patch applied"
+          else
+            echo "No DTS patch found — continuing with upstream DTBs only"
+          fi
 
       - name: Configure kernel
         run: |

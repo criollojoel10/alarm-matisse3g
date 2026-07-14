@@ -1,0 +1,83 @@
+From: alarm-matisse3g
+Subject: [PATCH] ARM: dts: qcom: Add SM-T531 (matisse3g) device tree
+
+Add support for Samsung Galaxy Tab 4 10.1 3G (SM-T531) which
+uses MSM8226 SoC with 3G modem, positioned between the WiFi-only
+T530 (APQ8026) and LTE T535 (MSM8926).
+
+Signed-off-by: alarm-matisse3g <alarm@matisse3g>
+---
+ arch/arm/boot/dts/qcom/Makefile                      |  1 +
+ arch/arm/boot/dts/qcom/qcom-msm8226-samsung-matisse3g.dts | 48 ++++++++++++++
+ 2 files changed, 49 insertions(+)
+ create mode 100644 arch/arm/boot/dts/qcom/qcom-msm8226-samsung-matisse3g.dts
+
+diff --git a/arch/arm/boot/dts/qcom/Makefile b/arch/arm/boot/dts/qcom/Makefile
+index 87e09abbd32c..21af55979970 100644
+--- a/arch/arm/boot/dts/qcom/Makefile
++++ b/arch/arm/boot/dts/qcom/Makefile
+@@ -31,6 +31,7 @@ dtb-$(CONFIG_ARCH_QCOM) += \
+ 	qcom-msm8226-microsoft-moneypenny.dtb \
+ 	qcom-msm8226-samsung-ms013g.dtb \
+ 	qcom-msm8226-samsung-s3ve3g.dtb \
++	qcom-msm8226-samsung-matisse3g.dtb \
+ 	qcom-msm8926-samsung-matisselte.dtb
+ dtb-$(CONFIG_ARCH_QCOM) += \
+ 	qcom-msm8226-motorola-falcon.dtb \
+diff --git a/arch/arm/boot/dts/qcom/qcom-msm8226-samsung-matisse3g.dts b/arch/arm/boot/dts/qcom/qcom-msm8226-samsung-matisse3g.dts
+new file mode 100644
+index 000000000000..e1d2f3c4b5a6
+--- /dev/null
++++ b/arch/arm/boot/dts/qcom/qcom-msm8226-samsung-matisse3g.dts
+@@ -0,0 +1,48 @@
++// SPDX-License-Identifier: BSD-3-Clause
++/*
++ * Device Tree for Samsung Galaxy Tab 4 10.1 3G (SM-T531)
++ * SoC: Qualcomm MSM8226 (Snapdragon 400)
++ * Codename: matisse3g
++ */
++
++/dts-v1/;
++
++#include "qcom-msm8226.dtsi"
++#include "qcom-msm8226-samsung-matisse-common.dtsi"
++
++/ {
++	model = "Samsung Galaxy Tab 4 10.1 3G";
++	compatible = "samsung,matisse3g", "qcom,msm8226";
++	chassis-type = "tablet";
++
++	reg_tsp_3p3v: regulator-tsp-3p3v {
++		compatible = "regulator-fixed";
++		regulator-name = "tsp_3p3v";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++
++		gpio = <&tlmm 73 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++
++		pinctrl-names = "default";
++		pinctrl-0 = <&tsp_en1_default_state>;
++	};
++};
++
++&modem {
++	mss-supply = <&pm8226_s5>;
++};
++
++&pm8226_l3 {
++	regulator-max-microvolt = <1337500>;
++};
++
++&pm8226_s4 {
++	regulator-max-microvolt = <1800000>;
++};
++
++&tlmm {
++	tsp_en1_default_state: tsp-en1-default-state {
++		pins = "gpio73";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++};
