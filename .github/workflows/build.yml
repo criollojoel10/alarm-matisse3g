@@ -112,7 +112,7 @@ jobs:
           cp linux/arch/arm/boot/zImage stage/boot/
           cp linux/arch/arm/boot/dts/qcom/msm8226*.dtb stage/dtbs/ 2>/dev/null || true
           cp linux/arch/arm/boot/dts/qcom/qcom-msm8226*.dtb stage/dtbs/ 2>/dev/null || true
-          cp -r modules-install/lib/modules/${{ steps.kver.outputs.ver }} stage/modules/
+          cp -r modules-install/lib/modules/${{ steps.kver.outputs.ver }} stage/modules/&& rm -f stage/modules/${{ steps.kver.outputs.ver }}/{build,source}
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
@@ -219,7 +219,7 @@ jobs:
       - name: Create ext4 sparse image
         run: |
           # Create 2.5GB image (fits 8GB eMMC comfortably)
-          dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=2500
+          dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=3000
           sudo mkfs.ext4 -O ^metadata_csum,^64bit -F alarm-rootfs.raw
           sudo mount -o loop alarm-rootfs.raw /mnt
           sudo cp -a rootfs/* /mnt/
