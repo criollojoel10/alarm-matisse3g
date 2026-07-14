@@ -340,9 +340,9 @@ jobs:
 
           # ── Create archive ──
           cd release
-          tar czf ../alarm-matisse3g-v1-latest.tar.gz .
+          tar czf alarm-matisse3g-v1-latest.tar.gz .
           cd ..
-          sha256sum alarm-matisse3g-v1-latest.tar.gz > sha256sums.txt
+          sha256sum alarm-matisse3g-v1-latest.tar.gz > alarm-matisse3g-v1-latest.tar.gz.sha256
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -370,6 +370,7 @@ jobs:
             Ver FLASH.txt en el release package.
           files: |
             release/alarm-matisse3g-v1-latest.tar.gz
+            release/alarm-matisse3g-v1-latest.tar.gz.sha256
             release/lk2nd-msm8226.img
             release/alarm-matisse3g-rootfs.img
           fail_on_unmatched_files: true
