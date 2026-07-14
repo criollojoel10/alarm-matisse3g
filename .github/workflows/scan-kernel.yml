@@ -1,0 +1,88 @@
+name: scan-kernel
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: 'msm8226-mainline branch/tag'
+        required: false
+        default: 'qcom-msm8226-6.16.y'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone msm8226-mainline
+        run: |
+          git clone --depth=1 --branch=${{ github.event.inputs.kernel_ref }} \
+            https://github.com/msm8226-mainline/linux.git kernel-src
+          cd kernel-src
+          echo "KERNEL_VERSION=$(make kernelrelease 2>/dev/null || git describe --tags --always)" >> $GITHUB_ENV
+          echo "KERNEL_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_ENV
+          echo "KERNEL_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Extract kernel config
+        run: |
+          cp kernel-src/arch/arm/configs/qcom_defconfig config-extracted
+          grep -E 'CONFIG_WCN|CONFIG_BT|CONFIG_QCOM_WCNSS|CONFIG_CMA|CONFIG_EXT4|CONFIG_CFG80211|CONFIG_MAC80211|CONFIG_RFKILL' \
+            config-extracted > wifi-bt-config.txt || true
+          {
+            echo "=== KERNEL INFO ==="
+            echo "Version: ${{ env.KERNEL_VERSION }}"
+            echo "Branch: ${{ env.KERNEL_BRANCH }}"
+            echo "Commit: ${{ env.KERNEL_COMMIT }}"
+            echo ""
+            echo "=== WIFI/BT CONFIG ==="
+            cat wifi-bt-config.txt
+          } > scan-report.txt
+
+      - name: Extract Device Trees
+        run: |
+          ls kernel-src/arch/arm/boot/dts/qcom/qcom-msm8226-samsung-matisse*.dts* 2>/dev/null >> scan-report.txt || echo "No matisse DTS found" >> scan-report.txt
+          echo "" >> scan-report.txt
+          echo "=== WCNSS/WIFI/BT NODES in DTS ===" >> scan-report.txt
+          grep -n 'pronto\|wcnss\|blsp1_uart3\|wlan\|iris\|bt_sco\|bt_sleep' \
+            kernel-src/arch/arm/boot/dts/qcom/qcom-msm8226-samsung-matisse-common.dtsi \
+            2>/dev/null | head -50 >> scan-report.txt || echo "No DTSI found" >> scan-report.txt
+
+      - name: List WCN36XX driver
+        run: |
+          echo "" >> scan-report.txt
+          echo "=== WCN36XX DRIVER ===" >> scan-report.txt
+          ls -la kernel-src/drivers/net/wireless/ath/wcn36xx/ 2>/dev/null >> scan-report.txt
+          echo "" >> scan-report.txt
+          echo "=== WCNSS CTRL ===" >> scan-report.txt
+          ls -la kernel-src/drivers/soc/qcom/wcnss_ctrl.c 2>/dev/null >> scan-report.txt
+          echo "" >> scan-report.txt
+          echo "=== WCNSS PIL ===" >> scan-report.txt
+          ls kernel-src/drivers/remoteproc/qcom_wcnss*.c 2>/dev/null >> scan-report.txt
+
+      - name: Bluetooth HCI UART
+        run: |
+          echo "" >> scan-report.txt
+          echo "=== BT HCI UART ===" >> scan-report.txt
+          grep -n 'msm\|BCM\|BCM43430\|WCN3660\|bcm\|ath3k' \
+            kernel-src/drivers/bluetooth/hci_uart.c 2>/dev/null | head -30 >> scan-report.txt || true
+          ls kernel-src/drivers/bluetooth/btqcomsmd.c 2>/dev/null && \
+            grep -n 'msm\|BCM\|WCN' kernel-src/drivers/bluetooth/btqcomsmd.c >> scan-report.txt || \
+            echo "btqcomsmd not present" >> scan-report.txt
+
+      - name: List all DTB targets
+        run: |
+          echo "" >> scan-report.txt
+          echo "=== DTB TARGETS ===" >> scan-report.txt
+          grep -n 'msm8226' kernel-src/arch/arm/boot/dts/qcom/Makefile 2>/dev/null >> scan-report.txt || \
+            echo "Makefile not found" >> scan-report.txt
+
+      - name: Upload scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-scan-report
+          path: |
+            scan-report.txt
+            config-extracted
+          retention-days: 30
+
+      - name: Show report summary
+        run: |
+          echo "=== SCAN REPORT ==="
+          cat scan-report.txt

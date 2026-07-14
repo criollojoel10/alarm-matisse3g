@@ -1,0 +1,25 @@
+# alarm-matisse3g .gitignore
+
+# Linux kernel source
+linux/
+lk2nd/
+
+# Build artifacts
+modules-install/
+rootfs/
+*.img
+*.raw
+*.ext4
+*.tar.gz
+sha256sums.txt
+
+# Editor
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+
+# Temp
+tmp/
+*.tmp

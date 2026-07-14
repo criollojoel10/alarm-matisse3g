@@ -1,0 +1,361 @@
+name: build-alarm-matisse3g
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: 'msm8226-mainline branch/tag'
+        required: false
+        default: 'qcom-msm8226-6.16.y'
+      lk2nd_version:
+        description: 'lk2nd version tag'
+        required: false
+        default: 'v0.15.0'
+
+env:
+  RELEASE_TAG: v$(date +'%Y%m%d')
+  KERNEL_REPO: msm8226-mainline/linux
+  KERNEL_REF: ${{ github.event.inputs.kernel_ref || 'qcom-msm8226-6.16.y' }}
+  LK2ND_TAG: ${{ github.event.inputs.lk2nd_version || 'v0.15.0' }}
+  ROOTFS_URL: http://os.archlinuxarm.org/os/ArchLinuxARM-armv7-latest.tar.gz
+
+jobs:
+  # ═══════════════════════════════════════════════
+  # JOB 1: BUILD KERNEL (zImage + dtbs + modules)
+  # ═══════════════════════════════════════════════
+  build-kernel:
+    runs-on: ubuntu-latest
+    outputs:
+      kernel-version: ${{ steps.kver.outputs.ver }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf \
+            libncurses-dev flex bison openssl libssl-dev \
+            dkms libelf-dev libudev-dev libpci-dev libiberty-dev \
+            autoconf bc kmod cpio device-tree-compiler
+
+      - name: Clone msm8226-mainline
+        run: |
+          git clone --depth=1 --branch=${{ env.KERNEL_REF }} \
+            https://github.com/${{ env.KERNEL_REPO }}.git linux
+
+      - name: Configure kernel
+        run: |
+          cd linux
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- qcom_defconfig
+
+          # ── Absolute minimum: WiFi, BT, filesystem ──
+          ./scripts/config --module CONFIG_WCN36XX
+          ./scripts/config --enable CONFIG_QCOM_WCNSS_CTRL
+          ./scripts/config --enable CONFIG_QCOM_WCNSS_PIL
+          ./scripts/config --module CONFIG_BT_HCIUART
+          ./scripts/config --enable CONFIG_BT_HCIUART_BCM
+          ./scripts/config --enable CONFIG_CFG80211
+          ./scripts/config --module CONFIG_MAC80211
+          ./scripts/config --enable CONFIG_RFKILL
+          ./scripts/config --enable CONFIG_DEVTMPFS
+          ./scripts/config --enable CONFIG_DEVTMPFS_MOUNT
+          ./scripts/config --enable CONFIG_FW_LOADER
+          ./scripts/config --enable CONFIG_EXT4_FS
+          ./scripts/config --enable CONFIG_EXT4_USE_FOR_EXT2
+          ./scripts/config --module CONFIG_USB_NET_DRIVERS
+          ./scripts/config --module CONFIG_USB_USBNET
+          ./scripts/config --module CONFIG_NETDEVICES
+
+          # ── CMA for GPU memory ──
+          ./scripts/config --set-val CONFIG_CMA_SIZE_MBYTES 64
+
+          # ── Save final config ──
+          cp .config ../kernel-config-final
+
+      - name: Build zImage
+        run: |
+          cd linux
+          make -j$(nproc) ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- zImage
+          make -j$(nproc) ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- dtbs
+          make -j$(nproc) ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+
+      - name: Install modules
+        run: |
+          cd linux
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+            modules_install INSTALL_MOD_PATH=../modules-install
+
+      - name: Extract kernel version
+        id: kver
+        run: |
+          cd linux
+          echo "ver=$(make -s ARCH=arm kernelrelease)" >> $GITHUB_OUTPUT
+
+      - name: Stage kernel artifacts
+        run: |
+          mkdir -p stage/boot stage/dtbs stage/modules
+          cp linux/arch/arm/boot/zImage stage/boot/
+          cp linux/arch/arm/boot/dts/qcom/msm8226*.dtb stage/dtbs/ 2>/dev/null || true
+          cp linux/arch/arm/boot/dts/qcom/qcom-msm8226*.dtb stage/dtbs/ 2>/dev/null || true
+          cp -r modules-install/lib/modules/${{ steps.kver.outputs.ver }} stage/modules/
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-artifacts
+          path: stage/
+          retention-days: 5
+
+      - name: Upload kernel config
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-config
+          path: kernel-config-final
+          retention-days: 5
+
+  # ═══════════════════════════════════════════════
+  # JOB 2: GET LK2ND (prebuilt or build from source)
+  # ═══════════════════════════════════════════════
+  get-lk2nd:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies (for source build fallback)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf make
+
+      - name: Download or build lk2nd
+        run: |
+          RELEASE_URL="https://github.com/msm8916-mainline/lk2nd/releases/download/${{ env.LK2ND_TAG }}/lk2nd-msm8226.img"
+          if wget --spider "$RELEASE_URL" 2>/dev/null; then
+            echo "Downloading prebuilt lk2nd..."
+            wget "$RELEASE_URL" -O lk2nd-msm8226.img
+          else
+            echo "No prebuilt — building from source..."
+            git clone --depth=1 --branch=${{ env.LK2ND_TAG }} \
+              https://github.com/msm8916-mainline/lk2nd.git
+            cd lk2nd
+            make TOOLCHAIN_PREFIX=arm-linux-gnueabihf- lk2nd-msm8226
+            cp build-lk2nd-msm8226/lk2nd-msm8226.img ../lk2nd-msm8226.img
+          fi
+          sha256sum lk2nd-msm8226.img > lk2nd-msm8226.img.sha256
+
+      - name: Upload lk2nd
+        uses: actions/upload-artifact@v4
+        with:
+          name: lk2nd
+          path: |
+            lk2nd-msm8226.img
+            lk2nd-msm8226.img.sha256
+          retention-days: 5
+
+  # ═══════════════════════════════════════════════
+  # JOB 3: BUILD ROOTFS IMAGE (Arch ARM + overlay + kernel)
+  # ═══════════════════════════════════════════════
+  build-rootfs:
+    needs: [build-kernel]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kernel-artifacts
+          path: kernel/
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget bsdtar fakeroot e2fsprogs android-sdk-libsparse-utils
+
+      - name: Download Arch Linux ARM rootfs
+        run: |
+          wget -q "${{ env.ROOTFS_URL }}" -O ArchLinuxARM-armv7-latest.tar.gz
+          wget -q "${{ env.ROOTFS_URL }}.md5" -O ArchLinuxARM-armv7-latest.tar.gz.md5
+          md5sum -c ArchLinuxARM-armv7-latest.tar.gz.md5 || { echo "MD5 mismatch!"; exit 1; }
+
+      - name: Prepare rootfs
+        run: |
+          sudo mkdir -p rootfs
+          sudo bsdtar -xpf ArchLinuxARM-armv7-latest.tar.gz -C rootfs/
+
+          # ── Ensure resolv.conf for pacman-key ──
+          echo "nameserver 1.1.1.1" | sudo tee rootfs/etc/resolv.conf
+
+          # ── Apply overlay ──
+          if [ -d overlay/ ]; then
+            sudo cp -rv overlay/* rootfs/
+          fi
+
+          # ── Install kernel modules ──
+          MODDIR=$(ls -d kernel/modules/*/ 2>/dev/null | head -1)
+          if [ -n "$MODDIR" ]; then
+            sudo cp -rv "$MODDIR" rootfs/lib/modules/
+          fi
+
+          # ── Install kernel + dtbs ──
+          sudo mkdir -p rootfs/boot
+          sudo cp kernel/boot/zImage rootfs/boot/
+          sudo mkdir -p rootfs/boot/dtbs
+          sudo cp kernel/dtbs/*.dtb rootfs/boot/dtbs/ 2>/dev/null || true
+
+          # ── Fix permissions ──
+          sudo chown -R root:root rootfs/etc 2>/dev/null || true
+
+      - name: Create ext4 sparse image
+        run: |
+          # Create 2.5GB image (fits 8GB eMMC comfortably)
+          dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=2500
+          sudo mkfs.ext4 -O ^metadata_csum,^64bit -F alarm-rootfs.raw
+          sudo mount -o loop alarm-rootfs.raw /mnt
+          sudo cp -a rootfs/* /mnt/
+          sudo umount /mnt
+
+          # Convert to sparse Android image format
+          img2simg alarm-rootfs.raw alarm-matisse3g-rootfs.img
+          sha256sum alarm-matisse3g-rootfs.img > alarm-matisse3g-rootfs.img.sha256
+
+          echo "Rootfs image size:"
+          ls -lh alarm-matisse3g-rootfs.img
+
+      - name: Upload rootfs image
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-image
+          path: |
+            alarm-matisse3g-rootfs.img
+            alarm-matisse3g-rootfs.img.sha256
+          retention-days: 5
+
+  # ═══════════════════════════════════════════════
+  # JOB 4: ASSEMBLE + RELEASE
+  # ═══════════════════════════════════════════════
+  assemble-and-release:
+    needs: [build-kernel, get-lk2nd, build-rootfs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lk2nd
+          path: lk2nd/
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs-image
+          path: images/
+      - uses: actions/download-artifact@v4
+        with:
+          name: kernel-config
+          path: config/
+
+      - name: Package release
+        run: |
+          mkdir -p release
+
+          # ── Copy artifacts ──
+          cp lk2nd/lk2nd-msm8226.img release/
+          cp lk2nd/lk2nd-msm8226.img.sha256 release/
+          cp images/alarm-matisse3g-rootfs.img release/
+          cp images/alarm-matisse3g-rootfs.img.sha256 release/
+
+          # ── Flash guide ──
+          cat > release/FLASH.txt << 'FLASH'
+          ╔══════════════════════════════════════════════════╗
+          ║  alarm-matisse3g - Arch Linux ARM para SM-T531  ║
+          ╚══════════════════════════════════════════════════╝
+
+          ARCHIVOS:
+            lk2nd-msm8226.img           → Bootloader secundario (flash una vez)
+            alarm-matisse3g-rootfs.img   → Sistema completo (partición SYSTEM)
+
+          REQUISITOS:
+            - TWRP instalado (para backup)
+            - PC con Heimdall
+            - Cable USB
+            - Firmware WiFi extraído de Android (ver más abajo)
+
+          FLASHEO (pasos exactos):
+
+          1. Backup de particiones en TWRP (BOOT, SYSTEM, EFS, MODEM)
+
+          2. Apagar la tablet
+
+          3. Entrar a Download Mode:
+             Power + Home + VolDown
+
+          4. Flashear lk2nd (UNA SOLA VEZ):
+             heimdall flash --BOOT lk2nd-msm8226.img --no-reboot
+
+          5. DESCONECTAR USB y reiniciar manualmente:
+             Power + Home + VolDown  (vuelve a Download Mode)
+
+          6. Flashear sistema:
+             heimdall flash --SYSTEM alarm-matisse3g-rootfs.img
+
+          7. REBOOT → lk2nd arranca kernel mainline desde SYSTEM
+
+          PRIMER ARRANQUE:
+            - Login: alarm / alarm
+            - Red USB networking: 172.16.42.1 (ssh alarm@172.16.42.1)
+            - sudo pacman -Syu  (actualizar sistema)
+            - Configurar WiFi:
+              1. Extraer firmware de Android:
+                 adb shell "cp /system/vendor/firmware/wlan/prima/* /sdcard/"
+                 adb pull /sdcard/WCNSS_qcom_wlan_nv.bin .
+                 adb pull /sdcard/WCNSS_qcom_cfg.ini .
+                 adb pull /sdcard/wcnss.* .
+              2. Copiar a Arch:
+                 sudo mkdir -p /lib/firmware/wlan/prima /lib/firmware/qcom
+                 sudo cp WCNSS_qcom_wlan_nv.bin /lib/firmware/wlan/prima/
+                 sudo cp WCNSS_qcom_cfg.ini /lib/firmware/wlan/prima/
+                 sudo cp wcnss.* /lib/firmware/qcom/
+              3. sudo modprobe wcn36xx
+              4. sudo systemctl restart systemd-networkd
+
+          INSTALAR XFCE:
+            sudo pacman -S xfce4 xfce4-goodies lightdm lightdm-gtk-greeter
+            sudo systemctl enable lightdm
+            sudo systemctl start lightdm
+
+          NOTAS:
+            - La imagen es ext4 sparse (~2.5GB)
+            - Si no bootea, probar con USB conectado
+            - Para volver a Android: flashear boot.img stock con TWRP
+          FLASH
+
+          # ── Create archive ──
+          cd release
+          tar czf ../alarm-matisse3g-v1-latest.tar.gz .
+          cd ..
+          sha256sum alarm-matisse3g-v1-latest.tar.gz > sha256sums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "alarm-matisse3g ${{ env.RELEASE_TAG }}"
+          body: |
+            # 🥭 alarm-matisse3g Build
+
+            **Kernel:** ${{ env.KERNEL_REF }}
+            **lk2nd:** ${{ env.LK2ND_TAG }}
+            **Rootfs:** Arch Linux ARM armv7h
+            
+            ## Contenido
+            - `lk2nd-msm8226.img` — bootloader secundario (flash una vez)
+            - `alarm-matisse3g-rootfs.img` — sistema completo listo para SYSTEM
+            
+            ## WiFi
+            wcn36xx driver incluido. Firmware no redistribuible — extraer de Android stock:
+            - `/system/vendor/firmware/wlan/prima/WCNSS_qcom_wlan_nv.bin`
+            - `/system/vendor/firmware/wlan/prima/WCNSS_qcom_cfg.ini`
+            - `/system/vendor/firmware/wcnss.*`
+            
+            ## Flasheo
+            Ver FLASH.txt en el release package.
+          files: |
+            release/alarm-matisse3g-v1-latest.tar.gz
+            release/lk2nd-msm8226.img
+            release/alarm-matisse3g-rootfs.img
+          fail_on_unmatched_files: true
