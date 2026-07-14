@@ -180,7 +180,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget bsdtar fakeroot e2fsprogs android-sdk-libsparse-utils
+          sudo apt-get install -y wget fakeroot e2fsprogs android-sdk-libsparse-utils
 
       - name: Download Arch Linux ARM rootfs
         run: |
@@ -191,7 +191,7 @@ jobs:
       - name: Prepare rootfs
         run: |
           sudo mkdir -p rootfs
-          sudo bsdtar -xpf ArchLinuxARM-armv7-latest.tar.gz -C rootfs/
+          sudo tar -xpf ArchLinuxARM-armv7-latest.tar.gz -C rootfs/
 
           # ── Ensure resolv.conf for pacman-key ──
           echo "nameserver 1.1.1.1" | sudo tee rootfs/etc/resolv.conf

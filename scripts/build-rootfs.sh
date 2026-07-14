@@ -12,7 +12,7 @@ md5sum -c ArchLinuxARM-armv7-latest.tar.gz.md5
 
 echo "==> Extracting..."
 sudo mkdir -p rootfs
-sudo bsdtar -xpf ArchLinuxARM-armv7-latest.tar.gz -C rootfs/
+sudo tar -xpf ArchLinuxARM-armv7-latest.tar.gz -C rootfs/
 
 echo "nameserver 1.1.1.1" | sudo tee rootfs/etc/resolv.conf
 
