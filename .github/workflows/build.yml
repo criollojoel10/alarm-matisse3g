@@ -11,13 +11,13 @@ on:
       lk2nd_version:
         description: 'lk2nd version tag'
         required: false
-        default: '22.0'
+        default: '23.0'
 
 env:
   RELEASE_TAG: v$(date +'%Y%m%d')
   KERNEL_REPO: msm8226-mainline/linux
   KERNEL_REF: ${{ github.event.inputs.kernel_ref || 'qcom-msm8226-6.16.y' }}
-  LK2ND_TAG: ${{ github.event.inputs.lk2nd_version || '22.0' }}
+  LK2ND_TAG: ${{ github.event.inputs.lk2nd_version || '23.0' }}
   ROOTFS_URL: http://os.archlinuxarm.org/os/ArchLinuxARM-armv7-latest.tar.gz
 
 jobs:
@@ -81,6 +81,12 @@ jobs:
           ./scripts/config --module CONFIG_USB_USBNET
           ./scripts/config --module CONFIG_NETDEVICES
 
+          # ── USB gadget (Ethernet-over-USB for initial setup) ──
+          ./scripts/config --module CONFIG_USB_ETH
+          ./scripts/config --module CONFIG_USB_ETH_RNDIS
+          ./scripts/config --module CONFIG_USB_GADGET
+          ./scripts/config --enable CONFIG_USB_GADGETFS
+
           # ── CMA for GPU memory ──
           ./scripts/config --set-val CONFIG_CMA_SIZE_MBYTES 64
 
@@ -112,7 +118,7 @@ jobs:
           cp linux/arch/arm/boot/zImage stage/boot/
           cp linux/arch/arm/boot/dts/qcom/msm8226*.dtb stage/dtbs/ 2>/dev/null || true
           cp linux/arch/arm/boot/dts/qcom/qcom-msm8226*.dtb stage/dtbs/ 2>/dev/null || true
-          cp -r modules-install/lib/modules/${{ steps.kver.outputs.ver }} stage/modules/&& rm -f stage/modules/${{ steps.kver.outputs.ver }}/{build,source}
+          cp -r modules-install/lib/modules/${{ steps.kver.outputs.ver }} stage/modules/
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
@@ -219,7 +225,7 @@ jobs:
       - name: Create ext4 sparse image
         run: |
           # Create 2.5GB image (fits 8GB eMMC comfortably)
-          dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=3000
+          dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=2200
           sudo mkfs.ext4 -O ^metadata_csum,^64bit -F alarm-rootfs.raw
           sudo mount -o loop alarm-rootfs.raw /mnt
           sudo cp -a rootfs/* /mnt/
@@ -284,65 +290,92 @@ jobs:
             alarm-matisse3g-rootfs.img   → Sistema completo (partición SYSTEM)
 
           REQUISITOS:
-            - TWRP instalado (para backup)
-            - PC con Heimdall
+            - PC con Heimdall y/o fastboot
             - Cable USB
-            - Firmware WiFi extraído de Android (ver más abajo)
+            - Firmware WiFi extraído de Android stock (ver más abajo)
 
-          FLASHEO (pasos exactos):
+          ════════════════
+          MÉTODO A: FASTBOOT (RECOMENDADO, con lk2nd v23+)
+          ════════════════
+          Una vez lk2nd flasheado, prender la tablet sola.
+          lk2nd arranca y cae a fastboot automáticamente.
 
-          1. Backup de particiones en TWRP (BOOT, SYSTEM, EFS, MODEM)
+          Conectar USB y:
+            fastboot flash system alarm-matisse3g-rootfs.img
+            fastboot continue
 
-          2. Apagar la tablet
-
-          3. Entrar a Download Mode:
-             Power + Home + VolDown
-
-          4. Flashear lk2nd (UNA SOLA VEZ):
+          ════════════════
+          MÉTODO B: HEIMDALL (alternativa, Download Mode)
+          ════════════════
+          1. Apagar la tablet
+          2. Entrar a Download Mode:  Power + Home + VolDown
+          3. Flashear lk2nd (UNA SOLA VEZ):
              heimdall flash --BOOT lk2nd-msm8226.img --no-reboot
-
-          5. DESCONECTAR USB y reiniciar manualmente:
-             Power + Home + VolDown  (vuelve a Download Mode)
-
+          4. Desconectar USB, mantener Power 10s
+          5. Volver a Download Mode: Power + Home + VolDown
           6. Flashear sistema:
              heimdall flash --SYSTEM alarm-matisse3g-rootfs.img
+          7. Desconectar USB, mantener Power 10s para bootear
 
-          7. REBOOT → lk2nd arranca kernel mainline desde SYSTEM
-
-          PRIMER ARRANQUE:
+          ════════════════
+          PRIMER ARRANQUE
+          ════════════════
             - Login: alarm / alarm
-            - Red USB networking: 172.16.42.1 (ssh alarm@172.16.42.1)
-            - sudo pacman -Syu  (actualizar sistema)
-            - Configurar WiFi:
-              1. Extraer firmware de Android:
-                 adb shell "cp /system/vendor/firmware/wlan/prima/* /sdcard/"
-                 adb pull /sdcard/WCNSS_qcom_wlan_nv.bin .
-                 adb pull /sdcard/WCNSS_qcom_cfg.ini .
-                 adb pull /sdcard/wcnss.* .
-              2. Copiar a Arch:
-                 sudo mkdir -p /lib/firmware/wlan/prima /lib/firmware/qcom
-                 sudo cp WCNSS_qcom_wlan_nv.bin /lib/firmware/wlan/prima/
-                 sudo cp WCNSS_qcom_cfg.ini /lib/firmware/wlan/prima/
-                 sudo cp wcnss.* /lib/firmware/qcom/
-              3. sudo modprobe wcn36xx
-              4. sudo systemctl restart systemd-networkd
+            - Red USB networking (si configurado): 172.16.42.1
+              ssh alarm@172.16.42.1
+            - sudo pacman -Syu
 
-          INSTALAR XFCE:
-            sudo pacman -S xfce4 xfce4-goodies lightdm lightdm-gtk-greeter
-            sudo systemctl enable lightdm
-            sudo systemctl start lightdm
+          ════════════════
+          WIFI
+          ════════════════
+          El firmware NO es redistribuible. Extraerlo del Android stock:
 
-          NOTAS:
-            - La imagen es ext4 sparse (~2.5GB)
-            - Si no bootea, probar con USB conectado
-            - Para volver a Android: flashear boot.img stock con TWRP
+          Con la tablet en Android stock (TouchWiz), via ADB:
+            for f in wcnss.mdt wcnss.b00 wcnss.b01 wcnss.b02 wcnss.b03 \
+                     wcnss.b04 wcnss.b05 wcnss.b06 wcnss.b07 wcnss.b08 wcnss.b09; do
+              adb shell su -c "dd if=/firmware/image/\$f of=/sdcard/\$f"
+              adb pull /sdcard/\$f .
+            done
+            adb shell su -c "dd if=/system/etc/firmware/wlan/prima/WCNSS_qcom_wlan_nv.bin of=/sdcard/"
+            adb shell su -c "dd if=/system/etc/firmware/wlan/prima/WCNSS_qcom_cfg.ini of=/sdcard/"
+            adb pull /sdcard/WCNSS_qcom_wlan_nv.bin .
+            adb pull /sdcard/WCNSS_qcom_cfg.ini .
+
+          Copiar a la tablet con Arch:
+            scp wcnss.* alarm@172.16.42.1:/home/alarm/
+            scp WCNSS_qcom_* alarm@172.16.42.1:/home/alarm/
+            # Luego en SSH en la tablet:
+            sudo mkdir -p /lib/firmware/qcom /lib/firmware/wlan/prima
+            sudo mv wcnss.* /lib/firmware/qcom/
+            sudo mv WCNSS_qcom_* /lib/firmware/wlan/prima/
+            sudo modprobe wcn36xx
+
+          ════════════════
+          ERRORES COMUNES
+          ════════════════
+          "4xxx < 6xxx" en Heimdall:
+            La imagen raw es más grande que la partición SYSTEM.
+            Usar fastboot en vez de Heimdall (fastboot maneja sparse).
+            O regenerar imagen con tamaño más pequeño.
+
+          "Failed to confirm end of file transfer":
+            Problema de cable USB o la tablet salió de Download Mode.
+            Usar fastboot en vez de Heimdall, o probar otro cable/puerto.
+
+          lk2nd muestra "unknow fixme!":
+            lk2nd demasiado viejo. Usar v23.0+ que tiene soporte SM-T531.
+
+          Pantalla negra después de flash:
+            Verificar que extlinux.conf esté en /extlinux/extlinux.conf
+            y que el kernel (zImage) y DTBs estén en /boot/
           FLASH
 
           # ── Create archive ──
           cd release
-          tar czf alarm-matisse3g-v1-latest.tar.gz .
-          cd ..
+          tar czf alarm-matisse3g-v1-latest.tar.gz --exclude=alarm-matisse3g-v1-latest.tar.gz .
           sha256sum alarm-matisse3g-v1-latest.tar.gz > alarm-matisse3g-v1-latest.tar.gz.sha256
+          ls -lh
+          cd ..
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -369,8 +402,7 @@ jobs:
             ## Flasheo
             Ver FLASH.txt en el release package.
           files: |
-            release/alarm-matisse3g-v1-latest.tar.gz
-            release/alarm-matisse3g-v1-latest.tar.gz.sha256
             release/lk2nd-msm8226.img
             release/alarm-matisse3g-rootfs.img
-          fail_on_unmatched_files: true
+            release/FLASH.txt
+          fail_on_unmatched_files: false

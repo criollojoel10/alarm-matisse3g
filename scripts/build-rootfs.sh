@@ -3,7 +3,7 @@
 set -e
 
 ROOTFS_URL="http://os.archlinuxarm.org/os/ArchLinuxARM-armv7-latest.tar.gz"
-IMAGE_SIZE_MB="${1:-2500}"
+IMAGE_SIZE_MB="${1:-2200}"
 
 echo "==> Downloading Arch Linux ARM rootfs..."
 wget -q "$ROOTFS_URL" -O ArchLinuxARM-armv7-latest.tar.gz

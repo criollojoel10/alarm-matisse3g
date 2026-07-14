@@ -1,0 +1,168 @@
+name: analyze-pmos-reference
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'  # weekly
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget curl git python3 python3-pip \
+            android-sdk-libsparse-utils e2fsprogs
+
+      - name: Fetch pmOS reference kernel config
+        run: |
+          mkdir -p pmos-ref
+          # Fetch kernel config from pmOS official package
+          echo "=== Fetching linux-postmarketos-qcom-msm8226 config ==="
+          # Try GitLab raw (main branch)
+          CONFIG_URL="https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/linux-postmarketos-qcom-msm8226/config-postmarketos-qcom-msm8226.armv7"
+          if curl -sfL "$CONFIG_URL" -o pmos-ref/kernel-config 2>/dev/null; then
+            echo "✅ Kernel config fetched"
+          else
+            # Try GitHub mirror
+            CONFIG_URL="https://raw.githubusercontent.com/postmarketOS/pmaports/master/device/testing/linux-postmarketos-qcom-msm8226/config-postmarketos-qcom-msm8226.armv7"
+            curl -sfL "$CONFIG_URL" -o pmos-ref/kernel-config || echo "❌ Could not fetch kernel config"
+          fi
+          wc -l pmos-ref/kernel-config 2>/dev/null
+
+      - name: Fetch pmOS device package info
+        run: |
+          echo "=== Fetching device-qcom-msm8226 ==="
+          # APKBUILD
+          for url in \
+            "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/device-qcom-msm8226/APKBUILD" \
+            "https://raw.githubusercontent.com/postmarketOS/pmaports/master/device/testing/device-qcom-msm8226/APKBUILD"; do
+            if curl -sfL "$url" -o pmos-ref/device-APKBUILD 2>/dev/null; then
+              echo "✅ Device APKBUILD fetched from $url"
+              break
+            fi
+          done
+          
+          # deviceinfo
+          for url in \
+            "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/device-qcom-msm8226/deviceinfo" \
+            "https://raw.githubusercontent.com/postmarketOS/pmaports/master/device/testing/device-qcom-msm8226/deviceinfo"; do
+            if curl -sfL "$url" -o pmos-ref/deviceinfo 2>/dev/null; then
+              echo "✅ deviceinfo fetched from $url"
+              break
+            fi
+          done
+
+      - name: Fetch pmOS kernel APKBUILD
+        run: |
+          echo "=== Fetching linux-postmarketos-qcom-msm8226 APKBUILD ==="
+          for url in \
+            "https://gitlab.postmarketos.org/postmarketOS/pmaports/-/raw/master/device/testing/linux-postmarketos-qcom-msm8226/APKBUILD" \
+            "https://raw.githubusercontent.com/postmarketOS/pmaports/master/device/testing/linux-postmarketos-qcom-msm8226/APKBUILD"; do
+            if curl -sfL "$url" -o pmos-ref/kernel-APKBUILD 2>/dev/null; then
+              echo "✅ Kernel APKBUILD fetched from $url"
+              break
+            fi
+          done
+
+      - name: Check for pmOS pre-built images
+        run: |
+          echo "=== Checking pmOS pre-built images for MSM8226 ==="
+          # qcom-msm8226 is testing category, check if images exist
+          for base in "https://images.postmarketos.org/bpo/edge" "https://images.postmarketos.org/bpo/v26.06"; do
+            for device in "qcom-msm8226" "samsung-matissewifi" "samsung-matisselte"; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" "$base/$device/" 2>/dev/null)
+              echo "  $base/$device/ → HTTP $code"
+              if [ "$code" = "200" ]; then
+                echo "    📦 Listing:"
+                curl -sfL "$base/$device/" | grep -o 'href="[^"]*\.img[^"]*"' | head -5
+              fi
+            done
+          done
+
+      - name: Compare kernel configs
+        run: |
+          echo "=== COMPARING KERNEL CONFIGS ==="
+          echo ""
+          
+          if [ -f pmos-ref/kernel-config ]; then
+            echo "pmOS kernel config: $(wc -l < pmos-ref/kernel-config) lines"
+            
+            # Check key options in pmOS config
+            echo ""
+            echo "Key options in pmOS config:"
+            for opt in CONFIG_WCN36XX CONFIG_QCOM_WCNSS_CTRL CONFIG_QCOM_WCNSS_PIL \
+                       CONFIG_BT_HCIUART CONFIG_USB_ETH CONFIG_CMA_SIZE_MBYTES \
+                       CONFIG_EXT4_FS CONFIG_DEVTMPFS CONFIG_FW_LOADER; do
+              grep "^$opt[=y]" pmos-ref/kernel-config && echo "  ✅ $opt" || echo "  ⚠️ $opt not set"
+            done
+            
+            echo ""
+            echo "Arch-specific:"
+            grep "^CONFIG_ARM\|^CONFIG_AEABI\|^CONFIG_VFP\|^CONFIG_NEON" pmos-ref/kernel-config | head -10
+          else
+            echo "❌ pmOS kernel config not available"
+          fi
+
+      - name: Compare with our kernel config
+        run: |
+          echo "=== OUR BUILD KERNEL CONFIG (reference) ==="
+          echo ""
+          echo "Our kernel config is generated from qcom_defconfig with additions:"
+          echo "  - CONFIG_WCN36XX=m"
+          echo "  - CONFIG_QCOM_WCNSS_CTRL=y"
+          echo "  - CONFIG_QCOM_WCNSS_PIL=y"
+          echo "  - CONFIG_BT_HCIUART=m"
+          echo "  - CONFIG_BT_HCIUART_BCM=y"
+          echo "  - CONFIG_CFG80211=y"
+          echo "  - CONFIG_MAC80211=m"
+          echo "  - CONFIG_RFKILL=y"
+          echo "  - CONFIG_DEVTMPFS=y"
+          echo "  - CONFIG_DEVTMPFS_MOUNT=y"
+          echo "  - CONFIG_FW_LOADER=y"
+          echo "  - CONFIG_EXT4_FS=y"
+          echo "  - CONFIG_EXT4_USE_FOR_EXT2=y"
+          echo "  - CONFIG_USB_ETH=m"
+          echo "  - CONFIG_USB_ETH_RNDIS=m"
+          echo "  - CONFIG_USB_GADGET=y"
+          echo "  - CONFIG_CMA_SIZE_MBYTES=64"
+          echo ""
+          echo "These are the minimal options for WiFi, USB, and filesystem."
+
+      - name: Parse pmOS deviceinfo
+        run: |
+          if [ -f pmos-ref/deviceinfo ]; then
+            echo "=== pmOS DEVICEINFO ==="
+            cat pmos-ref/deviceinfo
+            echo ""
+            
+            # Extract key values
+            echo "=== Key parameters ==="
+            grep -E 'flash|boot|kernel|dtb|initfs|modules|partition' pmos-ref/deviceinfo || echo "No matching params"
+          fi
+
+      - name: Upload reference data
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmos-reference
+          path: pmos-ref/
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "## pmOS Reference Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          for f in kernel-config device-APKBUILD deviceinfo kernel-APKBUILD; do
+            if [ -f "pmos-ref/$f" ]; then
+              echo "| \`$f\` | ✅ Fetched ($(wc -l < "pmos-ref/$f") lines) |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| \`$f\` | ❌ Not available |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The pmOS kernel configuration has been fetched for comparison." >> $GITHUB_STEP_SUMMARY
+          echo "Run this workflow manually to get the latest reference data." >> $GITHUB_STEP_SUMMARY

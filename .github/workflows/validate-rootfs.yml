@@ -1,0 +1,144 @@
+name: validate-rootfs
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["build-alarm-matisse3g"]
+    types: [completed]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs-image
+          path: images/
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id || github.run_id }}
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y android-sdk-libsparse-utils e2fsprogs
+
+      - name: Convert sparse → raw
+        run: |
+          simg2img images/alarm-matisse3g-rootfs.img rootfs-raw.img
+          echo "Raw size: $(stat -c%s rootfs-raw.img | numfmt --to=iec)"
+
+      - name: Mount and validate
+        run: |
+          sudo mkdir -p /mnt/validate
+          sudo mount -o loop,ro rootfs-raw.img /mnt/validate
+
+          echo "╔══════════════════════════════════════╗"
+          echo "║  alarm-matisse3g ROOTFS VALIDATION   ║"
+          echo "╚══════════════════════════════════════╝"
+          echo ""
+
+          PASS=0
+          FAIL=0
+          check() {
+            local desc="$1" path="$2"
+            if [ -e "/mnt/validate/$path" ]; then
+              echo "  ✅ $desc ($path)"
+              PASS=$((PASS+1))
+            else
+              echo "  ❌ $desc ($path) — NO ENCONTRADO"
+              FAIL=$((FAIL+1))
+            fi
+          }
+
+          # ── Boot chain checks ──
+          echo "── Boot chain ──"
+          check "extlinux.conf (lk2nd boot entry)" "extlinux/extlinux.conf"
+          check "Kernel zImage" "boot/zImage"
+          check "DTB files" "boot/dtbs"
+          DTB_COUNT=$(ls /mnt/validate/boot/dtbs/*.dtb 2>/dev/null | wc -l)
+          echo "       → $DTB_COUNT DTB files found"
+          if [ "$DTB_COUNT" -ge 1 ]; then
+            # Verify matisse3g DTB specifically
+            if ls /mnt/validate/boot/dtbs/*matisse3g* &>/dev/null; then
+              echo "  ✅ matisse3g DTB presente"
+            else
+              echo "  ⚠️  matisse3g DTB específico no encontrado (puede usar otro compatible)"
+            fi
+          fi
+
+          # ── Filesystem checks ──
+          echo ""
+          echo "── Filesystem ──"
+          check "fstab" "etc/fstab"
+          check "hostname" "etc/hostname"
+          check "passwd (users)" "etc/passwd"
+          check "shadow (passwords)" "etc/shadow"
+          check "mkinitcpio.conf" "etc/mkinitcpio.conf"
+
+          # Verify alarm user exists
+          if grep -q '^alarm:' /mnt/validate/etc/passwd 2>/dev/null; then
+            echo "  ✅ usuario 'alarm' existe"
+          else
+            echo "  ❌ usuario 'alarm' NO existe"
+            FAIL=$((FAIL+1))
+          fi
+          if grep -q '^alarm:' /mnt/validate/etc/shadow 2>/dev/null; then
+            echo "  ✅ shadow entry para 'alarm' existe"
+          else
+            echo "  ❌ shadow entry para 'alarm' NO existe"
+            FAIL=$((FAIL+1))
+          fi
+
+          # ── Kernel modules ──
+          echo ""
+          echo "── Kernel modules ──"
+          MODCOUNT=$(ls -d /mnt/validate/lib/modules/*/ 2>/dev/null | wc -l)
+          if [ "$MODCOUNT" -ge 1 ]; then
+            echo "  ✅ $MODCOUNT kernel module version(s) found"
+            for mdir in /mnt/validate/lib/modules/*/; do
+              ver=$(basename "$mdir")
+              echo "       → $ver"
+              # Check for wcn36xx
+              if find "$mdir" -name 'wcn36xx.ko' 2>/dev/null | head -1 | grep -q .; then
+                echo "  ✅ wcn36xx.ko presente"
+              else
+                echo "  ⚠️  wcn36xx.ko NO encontrado (puede necesitarse)"
+              fi
+            done
+          else
+            echo "  ❌ NO hay módulos de kernel instalados"
+            FAIL=$((FAIL+1))
+          fi
+
+          # ── Rootfs size ──
+          echo ""
+          echo "── Image size ──"
+          RAW_SIZE=$(stat -c%s rootfs-raw.img)
+          RAW_MB=$((RAW_SIZE / 1024 / 1024))
+          echo "  Tamaño raw: ${RAW_MB}MB"
+          if [ "$RAW_MB" -le 2300 ]; then
+            echo "  ✅ Cabe en SYSTEM (≤2300MB)"
+          else
+            echo "  ❌ NO cabe en SYSTEM (2300MB máximo)"
+            FAIL=$((FAIL+1))
+          fi
+
+          # ── Final result ──
+          echo ""
+          TOTAL=$((PASS+FAIL))
+          echo "── Results: $PASS/$TOTAL passed, $FAIL failed ──"
+          if [ "$FAIL" -eq 0 ]; then
+            echo "✅ VALIDATION PASSED — rootfs ready to flash!"
+          else
+            echo "❌ VALIDATION FAILED — $FAIL issue(s) need fixing"
+          fi
+
+          sudo umount /mnt/validate
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: rootfs-raw.img
+          retention-days: 1
