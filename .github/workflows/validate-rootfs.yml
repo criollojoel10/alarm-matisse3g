@@ -27,7 +27,28 @@ jobs:
           simg2img images/alarm-matisse3g-rootfs.img rootfs-raw.img
           echo "Raw size: $(stat -c%s rootfs-raw.img | numfmt --to=iec)"
 
-      - name: Mount and validate
+      - name: Validate filesystem type (must be ext2)
+        run: |
+          echo "=== Filesystem identity ==="
+          sudo blkid rootfs-raw.img
+
+          echo "=== Filesystem features ==="
+          sudo tune2fs -l rootfs-raw.img | grep -E 'Filesystem volume name|Filesystem features|Filesystem state|Filesystem OS type'
+
+          echo "=== Consistency check ==="
+          sudo e2fsck -fn rootfs-raw.img
+
+          # Automated feature check: fail if forbidden ext4 features present
+          FEATURES="$(sudo tune2fs -l rootfs-raw.img | sed -n 's/^Filesystem features:[[:space:]]*//p')"
+          echo "Filesystem features: $FEATURES"
+          FORBIDDEN='has_journal|extent|64bit|metadata_csum|bigalloc|inline_data|encrypt|casefold|verity|metadata_csum_seed|orphan_file'
+          if printf '%s\n' "$FEATURES" | grep -Eq "$FORBIDDEN"; then
+            echo "ERROR: filesystem contains features incompatible with lk2nd ext2 reader"
+            exit 1
+          fi
+          echo "✅ Filesystem is clean ext2 — no forbidden features found"
+
+      - name: Mount and validate contents
         run: |
           sudo mkdir -p /mnt/validate
           sudo mount -o loop,ro rootfs-raw.img /mnt/validate

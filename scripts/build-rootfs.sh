@@ -39,9 +39,9 @@ fi
 
 sudo chown -R root:root rootfs/etc 2>/dev/null || true
 
-echo "==> Creating ext4 sparse image (${IMAGE_SIZE_MB}MB)..."
+echo "==> Creating ext2 sparse image (${IMAGE_SIZE_MB}MB)..."
 dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=${IMAGE_SIZE_MB}
-sudo mkfs.ext4 -O ^metadata_csum,^64bit -F alarm-rootfs.raw
+sudo mkfs.ext2 -F -m 0 -L alarm-matisse3g alarm-rootfs.raw
 sudo mount -o loop alarm-rootfs.raw /mnt
 sudo cp -a rootfs/* /mnt/
 sudo umount /mnt

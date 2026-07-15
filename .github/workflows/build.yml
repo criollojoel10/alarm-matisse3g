@@ -226,14 +226,34 @@ jobs:
           # ── Fix permissions ──
           sudo chown -R root:root rootfs/etc 2>/dev/null || true
 
-      - name: Create ext4 sparse image
+      - name: Create ext2 sparse image
         run: |
-          # Create 2.5GB image (fits 8GB eMMC comfortably)
+          # Create 2.2GB image (fits 8GB eMMC comfortably)
           dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=2200
-          sudo mkfs.ext4 -L alarm-matisse3g -O ^metadata_csum,^64bit -F alarm-rootfs.raw
+          # lk2nd ONLY supports ext2, not ext4. Using ext4 with disabled features
+          # is fragile because defaults depend on /etc/mke2fs.conf and runner versions.
+          sudo mkfs.ext2 -F -m 0 -L alarm-matisse3g alarm-rootfs.raw
           sudo mount -o loop alarm-rootfs.raw /mnt
           sudo cp -a rootfs/* /mnt/
           sudo umount /mnt
+
+          # Validate filesystem is pure ext2 (no ext4 features)
+          echo "=== Filesystem identity ==="
+          sudo blkid alarm-rootfs.raw
+          echo "=== Filesystem features ==="
+          sudo tune2fs -l alarm-rootfs.raw | grep -E 'Filesystem volume name|Filesystem features|Filesystem state|Filesystem OS type'
+          echo "=== Consistency check ==="
+          sudo e2fsck -fn alarm-rootfs.raw
+
+          # Automated feature check: fail if forbidden ext4 features present
+          FEATURES="$(sudo tune2fs -l alarm-rootfs.raw | sed -n 's/^Filesystem features:[[:space:]]*//p')"
+          echo "Filesystem features: $FEATURES"
+          FORBIDDEN='has_journal|extent|64bit|metadata_csum|bigalloc|inline_data|encrypt|casefold|verity|metadata_csum_seed|orphan_file'
+          if printf '%s\n' "$FEATURES" | grep -Eq "$FORBIDDEN"; then
+            echo "ERROR: filesystem contains features incompatible with lk2nd ext2 reader"
+            exit 1
+          fi
+          echo "✅ Filesystem is clean ext2 — no forbidden features found"
 
           # Convert to sparse Android image format
           img2simg alarm-rootfs.raw alarm-matisse3g-rootfs.img
