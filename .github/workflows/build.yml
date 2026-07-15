@@ -310,11 +310,23 @@ jobs:
           3. Flashear rootfs a USERDATA:
              fastboot flash userdata alarm-matisse3g-rootfs.img
 
-          4. Borrar partición system (evita boot accidental):
+          4. (Opcional) Borrar partición system:
              fastboot erase system
+             ⚠️ Solo si quieres liberar espacio o evitar boot accidental
 
           5. Reiniciar la tablet:
              fastboot reboot
+
+          ════════════════
+          DEBUG: LOG DE LK2ND
+          ════════════════
+          ANTES de flashear, verificar que lk2nd detecta la tablet:
+            fastboot devices
+            fastboot getvar product
+            fastboot oem log
+            fastboot get_staged lk2nd-log.txt
+
+          Revisar el log: grep -Ei 'matisse|t531|msm8226|extlinux|simplefb' lk2nd-log.txt
 
           ════════════════
           PRIMER ARRANQUE
