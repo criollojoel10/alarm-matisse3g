@@ -119,6 +119,10 @@ jobs:
           cp linux/arch/arm/boot/dts/qcom/msm8226*.dtb stage/dtbs/ 2>/dev/null || true
           cp linux/arch/arm/boot/dts/qcom/qcom-msm8226*.dtb stage/dtbs/ 2>/dev/null || true
           cp -r modules-install/lib/modules/${{ steps.kver.outputs.ver }} stage/modules/
+          # Strip build/source symlinks to save ~700MB (they point to full kernel tree)
+          find stage/modules/ -type l \\( -name "build" -o -name "source" \\) -delete 2>/dev/null || true
+          echo "Kernel modules staged (size after stripping symlinks):"
+          du -sh stage/modules/
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
