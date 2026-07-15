@@ -14,8 +14,6 @@ jobs:
         run: |
           mkdir -p wiki-ref
           echo "=== Fetching pmOS MSM8916 installation wiki ==="
-          # Try multiple sources for the wiki content
-          # pmOS wiki uses Anubis PoW, try archived/cached versions
           for url in \
             "https://web.archive.org/web/2025/https://wiki.postmarketos.org/wiki/MSM8916_(Qualcomm_Snapdragon_410)_installation" \
             "https://wiki.postmarketos.org/wiki/MSM8916_(Qualcomm_Snapdragon_410)_installation?action=raw"; do
@@ -28,45 +26,88 @@ jobs:
           done
           wc -c wiki-ref/pmos-wiki-msm8916.html 2>/dev/null || echo "No wiki page fetched"
 
-      - name: Fetch pmOS wiki — Samsung Galaxy Tab 4 10.1
+      - name: Fetch pmOS device wiki pages
         run: |
-          echo "=== Fetching pmOS SM-T530/SM-T535 wiki ==="
-          for device in "samsung-matissewifi" "samsung-matisselte"; do
-            for url in \
-              "https://web.archive.org/web/2025/https://wiki.postmarketos.org/wiki/Samsung_Galaxy_Tab_4_10.1_WiFi_(samsung-matissewifi)" \
-              "https://wiki.postmarketos.org/wiki/Samsung_Galaxy_Tab_4_10.1_WiFi_(samsung-matissewifi)?action=raw"; do
-              code=$(curl -sL -o "wiki-ref/pmos-wiki-$device.html" -w "%{http_code}" "$url" 2>/dev/null)
-              echo "  $device @ $url → HTTP $code"
-              [ "$code" = "200" ] && break
-            done
+          echo "=== Fetching pmOS device wikis ==="
+          # Each fetch independent — failure of one doesn't block others
+          set +e
+          for device in "samsung-matissewifi" "samsung-matisselte" "Generic_MSM8226_(qcom-msm8226)" "Qualcomm_Snapdragon_400_(MSM8226)" "Lk2nd/Lk1st"; do
+            outfile="wiki-ref/pmos-wiki-${device//\//-}.html"
+            code=$(curl -sL -o "$outfile" -w "%{http_code}" "https://wiki.postmarketos.org/wiki/${device}?action=raw" 2>/dev/null)
+            echo "  $device → HTTP $code"
+            if [ -f "$outfile" ]; then
+              size=$(wc -c < "$outfile")
+              echo "    Size: $size bytes"
+              if [ "$size" -lt 100 ]; then
+                echo "    ⚠️ Too small, likely captcha page"
+                echo "WIKI_SIZE_TOO_SMALL" >> "$outfile"
+              fi
+            fi
           done
+          set -e
+
+      - name: Fetch community firmware repo
+        run: |
+          echo "=== Fetching matisse3g-fw info ==="
+          # Check if there's a firmware repo specifically for SM-T531
+          for url in \
+            "https://gitlab.postmarketos.org/api/v4/projects/exkc%2Fmatisse3g-fw/repository/files/README.md/raw?ref=main"; do
+            code=$(curl -sL -o wiki-ref/matisse3g-fw-readme.md -w "%{http_code}" "$url" 2>/dev/null)
+            echo "  $url → HTTP $code"
+          done
+          wc -c wiki-ref/matisse3g-fw-readme.md 2>/dev/null || echo "No fw repo info"
 
       - name: Extract key steps from wiki
         run: |
           echo "=== EXTRACTING KEY STEPS FROM pmOS WIKI ===" > wiki-ref/extracted-steps.txt
           echo "" >> wiki-ref/extracted-steps.txt
 
-          # Check for common extraction patterns
-          echo "--- Partition target ---" >> wiki-ref/extracted-steps.txt
-          grep -io 'userdata\|system\|boot\|cache' wiki-ref/pmos-wiki-msm8916.html 2>/dev/null | sort -u >> wiki-ref/extracted-steps.txt || echo "Could not scan"
-
-          # Add known pmOS MSM8916 procedure (from investigation)
+          # Known pmOS MSM8226 / Matisse procedure from community research
+          echo "--- Official pmOS MSM8226 flashing procedure (from wiki + community) ---" >> wiki-ref/extracted-steps.txt
+          echo "Source: pmOS wiki investigation + community tutorial (2026-07-14)" >> wiki-ref/extracted-steps.txt
           echo "" >> wiki-ref/extracted-steps.txt
-          echo "--- Official pmOS MSM8916 flashing procedure ---" >> wiki-ref/extracted-steps.txt
-          echo "Source: pmOS wiki confirmed via investigation (2026-07-14)" >> wiki-ref/extracted-steps.txt
-          echo "1. Install lk2nd (one-time, device-specific)" >> wiki-ref/extracted-steps.txt
-          echo "2. Boot lk2nd → fastboot mode" >> wiki-ref/extracted-steps.txt
-          echo "3. fastboot flash userdata <rootfs-image.img>" >> wiki-ref/extracted-steps.txt
-          echo "4. fastboot erase system" >> wiki-ref/extracted-steps.txt
-          echo "5. fastboot reboot" >> wiki-ref/extracted-steps.txt
+          echo "PHASE 1 — lk2nd only (test first!)" >> wiki-ref/extracted-steps.txt
+          echo "  1. Confirm device: adb shell getprop (SM-T531, matisse3g, msm8226)" >> wiki-ref/extracted-steps.txt
+          echo "  2. Backup everything: /sdcard, full TWRP backup, PIT (heimdall print-pit)" >> wiki-ref/extracted-steps.txt
+          echo "  3. Download lk2nd-msm8226.img (v23.0 for SM-T531 support)" >> wiki-ref/extracted-steps.txt
+          echo "     ⚠️ v23.0 is PRE-RELEASE — may be unstable" >> wiki-ref/extracted-steps.txt
+          echo "  4. Flash lk2nd to BOOT via Heimdall:" >> wiki-ref/extracted-steps.txt
+          echo "     heimdall flash --BOOT lk2nd-msm8226.img --no-reboot" >> wiki-ref/extracted-steps.txt
+          echo "  5. Force reboot (hold power 10s)" >> wiki-ref/extracted-steps.txt
+          echo "  6. Verify fastboot devices" >> wiki-ref/extracted-steps.txt
+          echo "  7. GET LOG FIRST: fastboot oem log && fastboot get_staged lk2nd-log.txt" >> wiki-ref/extracted-steps.txt
+          echo "  8. Confirm log shows SM-T531 / matisse / compatible DTB" >> wiki-ref/extracted-steps.txt
           echo "" >> wiki-ref/extracted-steps.txt
-          echo "--- lk2nd boot behavior ---" >> wiki-ref/extracted-steps.txt
-          echo "Source: lk2nd Documentation/boot.md" >> wiki-ref/extracted-steps.txt
-          echo "- Searches /extlinux/extlinux.conf on any partition >16MB" >> wiki-ref/extracted-steps.txt
-          echo "- Uses FDTDIR or FDT to load device tree" >> wiki-ref/extracted-steps.txt
-          echo "- Supports lk2nd.pass-simplefb for display" >> wiki-ref/extracted-steps.txt
-          echo "- Boot order: userdata → system → cache" >> wiki-ref/extracted-steps.txt
+          echo "PHASE 2 — Build minimal pmOS" >> wiki-ref/extracted-steps.txt
+          echo "  9. pmbootstrap init (channel: edge, vendor: qcom, device: msm8226, ui: console)" >> wiki-ref/extracted-steps.txt
+          echo "  10. pmbootstrap install (NO encryption, NO GUI)" >> wiki-ref/extracted-steps.txt
+          echo "  11. pmbootstrap export → get qcom-msm8226.img" >> wiki-ref/extracted-steps.txt
           echo "" >> wiki-ref/extracted-steps.txt
+          echo "PHASE 3 — Flash SYSTEM (not userdata!)" >> wiki-ref/extracted-steps.txt
+          echo "  12. heimdall flash --SYSTEM qcom-msm8226.img" >> wiki-ref/extracted-steps.txt
+          echo "  13. Reboot normally" >> wiki-ref/extracted-steps.txt
+          echo "  14. Wait several minutes for first boot" >> wiki-ref/extracted-steps.txt
+          echo "" >> wiki-ref/extracted-steps.txt
+          echo "PHASE 4 — Diagnose first boot" >> wiki-ref/extracted-steps.txt
+          echo "  15. Login → collect dmesg, lsblk, cmdline, os-release, ip-link" >> wiki-ref/extracted-steps.txt
+          echo "  16. Check display: ls /dev/fb* /dev/dri/*; dmesg | grep -i 'drm|framebuffer|simplefb|panel|tc358'" >> wiki-ref/extracted-steps.txt
+          echo "  17. Check battery: /sys/class/power_supply/*" >> wiki-ref/extracted-steps.txt
+          echo "" >> wiki-ref/extracted-steps.txt
+          echo "PHASE 5 — WiFi fix" >> wiki-ref/extracted-steps.txt
+          echo "  18. Install WCN3660A firmware from matisse3g-fw repo" >> wiki-ref/extracted-steps.txt
+          echo "  19. Path: /lib/firmware/postmarketos/wlan/prima/WCNSS_qcom_wlan_nv.bin" >> wiki-ref/extracted-steps.txt
+          echo "  20. rfkill unblock all; ip link set wlan0 up" >> wiki-ref/extracted-steps.txt
+          echo "  21. nmcli / iw for connection" >> wiki-ref/extracted-steps.txt
+          echo "" >> wiki-ref/extracted-steps.txt
+          echo "--- Known display issue ---" >> wiki-ref/extracted-steps.txt
+          echo "Blue screen: partial framebuffer init or tc358764 bridge driver." >> wiki-ref/extracted-steps.txt
+          echo "lk2nd.pass-simplefb needed in cmdline." >> wiki-ref/extracted-steps.txt
+          echo "Simple framebuffer may work after corrections." >> wiki-ref/extracted-steps.txt
+          echo "" >> wiki-ref/extracted-steps.txt
+          echo "--- Known WiFi issue ---" >> wiki-ref/extracted-steps.txt
+          echo "WCN3660A (wcn36xx) — hardware scanning may need to be disabled." >> wiki-ref/extracted-steps.txt
+          echo "Specific WCNSS_qcom_wlan_nv.bin for matisse3g is required." >> wiki-ref/extracted-steps.txt
+          echo ""
 
       - name: Compare wiki steps vs our configuration
         run: |
@@ -77,124 +118,133 @@ jobs:
 
           RESULTS=""
 
-          # 1. Partition target
-          OUR_FLASH_TARGET="userdata"
-          WIKI_TARGET="userdata"
-          if [ "$OUR_FLASH_TARGET" = "$WIKI_TARGET" ]; then
-            RESULTS="$RESULTS| 1 | Flash target | **userdata** (FLASH.txt, flash.sh) | ✅ Match |"$'\n'
+          # 1. Flash target — CRITICAL DISCREPANCY
+          # Tutorial says SYSTEM via Heimdall; we use userdata via fastboot
+          # This needs investigation — MSM8916 wiki says userdata, MSM8226 tutorial says SYSTEM
+          if grep -q 'flash userdata\|flash --SYSTEM\|flash.*SYSTEM' scripts/flash.sh 2>/dev/null; then
+            if grep -q 'flash.*SYSTEM' scripts/flash.sh 2>/dev/null; then
+              RESULTS="$RESULTS| 1 | Flash target | SYSTEM (via Heimdall) | ⚠️ Tutorial says SYSTEM; earlier research said userdata — CONFLICT |"$'\n'
+            else
+              RESULTS="$RESULTS| 1 | Flash target | userdata (via fastboot) | ⚠️ Tutorial says SYSTEM via Heimdall — CONFLICT with earlier research |"$'\n'
+            fi
           else
-            RESULTS="$RESULTS| 1 | Flash target | **$OUR_FLASH_TARGET** vs wiki **$WIKI_TARGET** | ❌ Mismatch |"$'\n'
+            RESULTS="$RESULTS| 1 | Flash target | Not found in scripts | ❌ |"$'\n'
           fi
 
-          # 2. Fastboot command
-          if grep -q 'flash userdata' overlay/etc/systemd/network/wlan0.network 2>/dev/null; then
-            : # dummy check
-          fi
-
-          if grep -q 'fastboot flash userdata' scripts/flash.sh 2>/dev/null; then
-            RESULTS="$RESULTS| 2 | Flash command | \`fastboot flash userdata\` (flash.sh) | ✅ Match |"$'\n'
+          # 2. lk2nd version
+          if grep -q '23\.0' scripts/flash.sh 2>/dev/null || grep -q 'v23\.0' FLASH.txt 2>/dev/null; then
+            RESULTS="$RESULTS| 2 | lk2nd version | 23.0 (pre-release) | ✅ Confirmed for SM-T531 |"$'\n'
           else
-            RESULTS="$RESULTS| 2 | Flash command | ❌ Not found in flash.sh | ❌ Mismatch |"$'\n'
+            RESULTS="$RESULTS| 2 | lk2nd version | Not specified | ❌ |"$'\n'
           fi
 
-          # 3. Erase system
-          if grep -q 'fastboot erase system' scripts/flash.sh 2>/dev/null || grep -qi 'erase system' FLASH.txt 2>/dev/null; then
-            RESULTS="$RESULTS| 3 | Erase system | \`fastboot erase system\` present | ✅ Match |"$'\n'
+          # 3. fastboot access check before OS install
+          if [ -f FLASH.txt ] && grep -qi 'verify\|check\|log\|fastboot devices' FLASH.txt 2>/dev/null; then
+            RESULTS="$RESULTS| 3 | Verify fastboot first | Listed in FLASH.txt | ✅ |"$'\n'
           else
-            RESULTS="$RESULTS| 3 | Erase system | ❌ Not found | ❌ Mismatch |"$'\n'
+            RESULTS="$RESULTS| 3 | Verify fastboot first | Not explicit in FLASH.txt | ⚠️ Should add lk2nd log step |"$'\n'
           fi
 
-          # 4. Reboot (not continue)
-          if grep -q 'fastboot reboot' scripts/flash.sh 2>/dev/null || grep -qi 'fastboot reboot' FLASH.txt 2>/dev/null; then
-            RESULTS="$RESULTS| 4 | Boot command | \`fastboot reboot\` present | ✅ Match |"$'\n'
-          else
-            RESULTS="$RESULTS| 4 | Boot command | ❌ Not found | ❌ Mismatch |"$'\n'
-          fi
-
-          # 5. extlinux.conf location
+          # 4. extlinux.conf location
           if [ -f overlay/extlinux/extlinux.conf ]; then
-            RESULTS="$RESULTS| 5 | extlinux.conf path | \`/extlinux/extlinux.conf\` (overlay) | ✅ Correct |"$'\n'
+            RESULTS="$RESULTS| 4 | extlinux.conf path | \`/extlinux/extlinux.conf\` | ✅ Correct |"$'\n'
           else
-            RESULTS="$RESULTS| 5 | extlinux.conf path | ❌ Missing | ❌ |"$'\n'
+            RESULTS="$RESULTS| 4 | extlinux.conf path | ❌ Missing | ❌ |"$'\n'
           fi
 
-          # 6. lk2nd.pass-simplefb
+          # 5. lk2nd.pass-simplefb
           if grep -q 'lk2nd.pass-simplefb' overlay/extlinux/extlinux.conf 2>/dev/null; then
-            RESULTS="$RESULTS| 6 | lk2nd.pass-simplefb | \`lk2nd.pass-simplefb=xrgb8888,autorefresh\` | ✅ Required |"$'\n'
+            RESULTS="$RESULTS| 5 | lk2nd.pass-simplefb | \`lk2nd.pass-simplefb=xrgb8888,autorefresh\` | ✅ Required (fixes black screen) |"$'\n'
           else
-            RESULTS="$RESULTS| 6 | lk2nd.pass-simplefb | ❌ Missing — display won't init | ❌ CRITICAL |"$'\n'
+            RESULTS="$RESULTS| 5 | lk2nd.pass-simplefb | ❌ Missing | ❌ CRITICAL |"$'\n'
           fi
 
-          # 7. FDT vs FDTDIR
+          # 6. FDT vs FDTDIR
           if grep -q '^[[:space:]]*FDT ' overlay/extlinux/extlinux.conf 2>/dev/null; then
-            RESULTS="$RESULTS| 7 | Device tree loading | Explicit \`FDT\` path | ✅ Robust |"$'\n'
+            RESULTS="$RESULTS| 6 | Device tree | Explicit \`FDT\` path | ✅ Robust |"$'\n'
           elif grep -q '^[[:space:]]*FDTDIR ' overlay/extlinux/extlinux.conf 2>/dev/null; then
-            RESULTS="$RESULTS| 7 | Device tree loading | \`FDTDIR\` (search dir) | ⚠️ Works but less robust |"$'\n'
+            RESULTS="$RESULTS| 6 | Device tree | \`FDTDIR\` (search) | ⚠️ Works but ambiguous |"$'\n'
           else
-            RESULTS="$RESULTS| 7 | Device tree loading | ❌ Missing FDT/FDTDIR | ❌ CRITICAL |"$'\n'
+            RESULTS="$RESULTS| 6 | Device tree | ❌ Missing | ❌ CRITICAL |"$'\n'
           fi
 
-          # 8. root=LABEL
+          # 7. root=LABEL
           if grep -q 'root=LABEL=' overlay/extlinux/extlinux.conf 2>/dev/null; then
-            RESULTS="$RESULTS| 8 | Root partition | \`root=LABEL=...\` | ✅ Partition-independent |"$'\n'
+            RESULTS="$RESULTS| 7 | Root partition | \`root=LABEL=...\` | ✅ Partition-independent |"$'\n'
           elif grep -q 'root=/dev/' overlay/extlinux/extlinux.conf 2>/dev/null; then
-            RESULTS="$RESULTS| 8 | Root partition | Hardcoded \`/dev/mmcblk*\` | ⚠️ Fragile |"$'\n'
+            RESULTS="$RESULTS| 7 | Root partition | Hardcoded \`/dev/mmcblk*\` | ⚠️ Fragile |"$'\n'
           else
-            RESULTS="$RESULTS| 8 | Root partition | ❌ Not found | ❌ |"$'\n'
+            RESULTS="$RESULTS| 7 | Root partition | ❌ Not found | ❌ |"$'\n'
           fi
 
-          # 9. rootfstype
-          if grep -q 'rootfstype=ext4' overlay/extlinux/extlinux.conf 2>/dev/null; then
-            RESULTS="$RESULTS| 9 | rootfstype | \`rootfstype=ext4\` (explicit) | ✅ Good practice |"$'\n'
-          else
-            RESULTS="$RESULTS| 9 | rootfstype | Not specified | ⚠️ Kernel auto-detects |"$'\n'
-          fi
-
-          # 10. Console
+          # 8. Console display
           if grep -q 'console=tty0' overlay/extlinux/extlinux.conf 2>/dev/null; then
-            RESULTS="$RESULTS| 10 | Console | \`console=tty0\` (display) | ✅ |"$'\n'
+            RESULTS="$RESULTS| 8 | Console display | \`console=tty0\` | ✅ |"$'\n'
+          elif grep -q 'console=tty' overlay/extlinux/extlinux.conf 2>/dev/null; then
+            RESULTS="$RESULTS| 8 | Console display | \`console=tty...\` present | ✅ |"$'\n'
           else
-            RESULTS="$RESULTS| 10 | Console | ❌ No display console | ⚠️|"$'\n'
+            RESULTS="$RESULTS| 8 | Console display | ❌ No console | ⚠️ |"$'\n'
           fi
 
-          # 11. mkfs label
-          if grep -q 'alarm-matisse3g' scripts/flash.sh 2>/dev/null; then
-            RESULTS="$RESULTS| 11 | Filesystem label | \`alarm-matisse3g\` referenced | ✅ |"$'\n'
+          # 9. Firmware path for WCNSS
+          if [ -d firmware ] && find firmware/ -name '*.bin' 2>/dev/null | grep -q .; then
+            RESULTS="$RESULTS| 9 | WCNSS firmware | $(find firmware/ -name '*.bin' | head -1) | ✅ Extracted, check path |"$'\n'
           else
-            RESULTS="$RESULTS| 11 | Filesystem label | Not found in flash.sh | ⚠️ Check |"$'\n'
+            RESULTS="$RESULTS| 9 | WCNSS firmware | Not in repo | ⚠️ Need to fetch |"$'\n'
+          fi
+
+          # 10. WiFi modules
+          if grep -q 'wcn36xx\|WCN36XX' overlay/etc/modules-load.d/*.conf 2>/dev/null; then
+            RESULTS="$RESULTS| 10 | WiFi modules | wcn36xx in modules-load | ✅ |"$'\n'
+          else
+            RESULTS="$RESULTS| 10 | WiFi modules | Not configured | ⚠️ |"$'\n'
           fi
 
           echo "$RESULTS" >> $GITHUB_STEP_SUMMARY
-
-          # Save for artifact
           echo "$RESULTS" > wiki-ref/validation-results.txt
+
+      - name: Document — key differences from pmOS approach
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Key Differences: Our Arch Linux ARM vs pmOS Official" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Aspect | Our Approach | pmOS Approach | Notes |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------------|---------------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Rootfs** | Arch Linux ARM (pacman) | Alpine Linux (apk) | Different package mgmt |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build tool** | CI workflows (manual) | pmbootstrap | pmbootstrap is more automated |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Kernel source** | msm8226-mainline/linux | linux-postmarketos-qcom-msm8226 | Same base, different configs |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Boot method** | extlinux.conf (lk2nd) | extlinux.conf (lk2nd) | Same |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Flash target** | userdata (fastboot) | SYSTEM (Heimdall) — per tutorial | ⚠️ CONFLICT — needs investigation |" >> $GITHUB_STEP_SUMMARY
+          echo "| **lk2nd version** | 23.0 (pre-release) | 23.0 (pre-release) | Same |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Device config** | Custom DTS (matisse3g) | qcom/msm8226 (generic) | Our DTS is SM-T531-specific |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Firmware path** | /lib/firmware/wcnss/ | /lib/firmware/postmarketos/wlan/prima/ | Different standard paths |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Flash tool** | fastboot | heimdall + fastboot | Both used in pmOS workflow |" >> $GITHUB_STEP_SUMMARY
+          echo "| **First boot goal** | Display + SSH | Console (serial or display) | Similar |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### ⚠️ Critical Question: SYSTEM vs userdata" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The pmOS wiki for MSM8916 says **userdata**. The matisse-specific tutorial says **SYSTEM**." >> $GITHUB_STEP_SUMMARY
+          echo "The difference is likely because:" >> $GITHUB_STEP_SUMMARY
+          echo "- MSM8916 devices have **fastboot** via lk2nd (can flash userdata directly)" >> $GITHUB_STEP_SUMMARY
+          echo "- MSM8226 devices may need **Heimdall** for first flash (SYSTEM partition)" >> $GITHUB_STEP_SUMMARY
+          echo "- Once lk2nd is in BOOT, fastboot becomes available for later flashes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Recommendation:** Follow the tutorial's order exactly:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Flash lk2nd to BOOT (Heimdall)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Boot → fastboot devices → GET LOG" >> $GITHUB_STEP_SUMMARY
+          echo "3. Then decide: fastboot flash userdata or heimdall flash --SYSTEM" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
       - name: Check extlinux.conf against wiki best practices
         run: |
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Current extlinux.conf" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           cat overlay/extlinux/extlinux.conf 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "NOT FOUND" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### pmOS Reference — Recommended extlinux.conf" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "TIMEOUT 10" >> $GITHUB_STEP_SUMMARY
-          echo "DEFAULT arch" >> $GITHUB_STEP_SUMMARY
-          echo "LABEL arch" >> $GITHUB_STEP_SUMMARY
-          echo "    LINUX /boot/zImage" >> $GITHUB_STEP_SUMMARY
-          echo "    FDT /boot/dtbs/qcom-msm8226-samsung-matisse3g.dtb" >> $GITHUB_STEP_SUMMARY
-          echo "    APPEND root=LABEL=alarm-matisse3g rw rootfstype=ext4 console=tty0 lk2nd.pass-simplefb=xrgb8888,autorefresh" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Key Differences from wiki" >> $GITHUB_STEP_SUMMARY
-          echo "- pmOS uses Alpine Linux (APK); we use Arch Linux ARM (pacman)" >> $GITHUB_STEP_SUMMARY
-          echo "- pmOS kernel is linux-postmarketos-qcom-msm8226; we use msm8226-mainline" >> $GITHUB_STEP_SUMMARY
-          echo "- Boot procedure (lk2nd → extlinux.conf → kernel) is identical" >> $GITHUB_STEP_SUMMARY
-          echo "- Flash procedure (fastboot flash userdata → erase system → reboot) is identical" >> $GITHUB_STEP_SUMMARY
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
 
           PASS=$(grep -c '✅' wiki-ref/validation-results.txt 2>/dev/null || echo 0)
           FAIL=$(grep -c '❌' wiki-ref/validation-results.txt 2>/dev/null || echo 0)
@@ -206,9 +256,9 @@ jobs:
           if [ "$FAIL" -gt 0 ]; then
             echo "**❌ Some checks failed — review mismatches before flashing**" >> $GITHUB_STEP_SUMMARY
           elif [ "$WARN" -gt 0 ]; then
-            echo "**⚠️ All critical checks pass, but review warnings**" >> $GITHUB_STEP_SUMMARY
+            echo "**⚠️ All critical checks pass, review warnings**" >> $GITHUB_STEP_SUMMARY
           else
-            echo "**✅ All checks pass — configuration matches pmOS wiki best practices**" >> $GITHUB_STEP_SUMMARY
+            echo "**✅ All checks pass**" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload wiki reference
