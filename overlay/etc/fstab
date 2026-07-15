@@ -1,5 +1,4 @@
 # alarm-matisse3g filesystem table
-/dev/mmcblk0p8	/		ext4	defaults,noatime		0 1
-/dev/mmcblk0p9	/home		ext4	defaults,noatime		0 2
+LABEL=alarm-matisse3g	/		ext4	defaults,noatime		0 1
 tmpfs		/tmp		tmpfs	defaults,nosuid,nodev,noatime,size=256M	0 0
 tmpfs		/var/log	tmpfs	defaults,nosuid,nodev,noatime,size=64M	0 0

@@ -14,7 +14,6 @@ on:
         default: '23.0'
 
 env:
-  RELEASE_TAG: v$(date +'%Y%m%d')
   KERNEL_REPO: msm8226-mainline/linux
   KERNEL_REF: ${{ github.event.inputs.kernel_ref || 'qcom-msm8226-6.16.y' }}
   LK2ND_TAG: ${{ github.event.inputs.lk2nd_version || '23.0' }}
@@ -231,7 +230,7 @@ jobs:
         run: |
           # Create 2.5GB image (fits 8GB eMMC comfortably)
           dd if=/dev/zero of=alarm-rootfs.raw bs=1M count=0 seek=2200
-          sudo mkfs.ext4 -O ^metadata_csum,^64bit -F alarm-rootfs.raw
+          sudo mkfs.ext4 -L alarm-matisse3g -O ^metadata_csum,^64bit -F alarm-rootfs.raw
           sudo mount -o loop alarm-rootfs.raw /mnt
           sudo cp -a rootfs/* /mnt/
           sudo umount /mnt
@@ -291,88 +290,74 @@ jobs:
           ╚══════════════════════════════════════════════════╝
 
           ARCHIVOS:
-            lk2nd-msm8226.img           → Bootloader secundario (flash una vez)
-            alarm-matisse3g-rootfs.img   → Sistema completo (partición SYSTEM)
+            lk2nd-msm8226.img              → Bootloader secundario (flash una vez)
+            alarm-matisse3g-rootfs.img       → Sistema completo (FLASH A USERDATA)
 
           REQUISITOS:
-            - PC con Heimdall y/o fastboot
+            - lk2nd v23+ YA flasheado en BOOT (fastboot accesible)
+            - PC con fastboot
             - Cable USB
-            - Firmware WiFi extraído de Android stock (ver más abajo)
+            - Firmware WiFi extraído de Android stock (ver abajo)
 
-          ════════════════
-          MÉTODO A: FASTBOOT (RECOMENDADO, con lk2nd v23+)
-          ════════════════
-          Una vez lk2nd flasheado, prender la tablet sola.
-          lk2nd arranca y cae a fastboot automáticamente.
+          ════════════════════════════════════════════
+          FLASHEO (lk2nd v23+, vía fastboot)
+          ════════════════════════════════════════════
+          1. Prender la tablet sola (sin USB)
+             lk2nd arranca → cae automáticamente a fastboot
 
-          Conectar USB y:
-            fastboot flash system alarm-matisse3g-rootfs.img
-            fastboot continue
+          2. Conectar USB a la PC
 
-          ════════════════
-          MÉTODO B: HEIMDALL (alternativa, Download Mode)
-          ════════════════
-          1. Apagar la tablet
-          2. Entrar a Download Mode:  Power + Home + VolDown
-          3. Flashear lk2nd (UNA SOLA VEZ):
-             heimdall flash --BOOT lk2nd-msm8226.img --no-reboot
-          4. Desconectar USB, mantener Power 10s
-          5. Volver a Download Mode: Power + Home + VolDown
-          6. Flashear sistema:
-             heimdall flash --SYSTEM alarm-matisse3g-rootfs.img
-          7. Desconectar USB, mantener Power 10s para bootear
+          3. Flashear rootfs a USERDATA:
+             fastboot flash userdata alarm-matisse3g-rootfs.img
+
+          4. Borrar partición system (evita boot accidental):
+             fastboot erase system
+
+          5. Reiniciar la tablet:
+             fastboot reboot
 
           ════════════════
           PRIMER ARRANQUE
           ════════════════
             - Login: alarm / alarm
-            - Red USB networking (si configurado): 172.16.42.1
-              ssh alarm@172.16.42.1
-            - sudo pacman -Syu
+            - sudo passwd root  (cambiar pass)
+            - WiFi: nmcli dev wifi connect "SSID" password "PASS"
+            - Actualizar: sudo pacman -Syu
 
           ════════════════
           WIFI
           ════════════════
-          El firmware NO es redistribuible. Extraerlo del Android stock:
+          El firmware WCNSS NO es redistribuible. Extraer de Android stock
+          (TouchWiz 5.0.2 SM-T531) via ADB desde la tablet con stock:
 
-          Con la tablet en Android stock (TouchWiz), via ADB:
             for f in wcnss.mdt wcnss.b00 wcnss.b01 wcnss.b02 wcnss.b03 \
                      wcnss.b04 wcnss.b05 wcnss.b06 wcnss.b07 wcnss.b08 wcnss.b09; do
               adb shell su -c "dd if=/firmware/image/\$f of=/sdcard/\$f"
               adb pull /sdcard/\$f .
             done
             adb shell su -c "dd if=/system/etc/firmware/wlan/prima/WCNSS_qcom_wlan_nv.bin of=/sdcard/"
-            adb shell su -c "dd if=/system/etc/firmware/wlan/prima/WCNSS_qcom_cfg.ini of=/sdcard/"
             adb pull /sdcard/WCNSS_qcom_wlan_nv.bin .
-            adb pull /sdcard/WCNSS_qcom_cfg.ini .
 
-          Copiar a la tablet con Arch:
-            scp wcnss.* alarm@172.16.42.1:/home/alarm/
-            scp WCNSS_qcom_* alarm@172.16.42.1:/home/alarm/
-            # Luego en SSH en la tablet:
+          Copiar a la tablet con Arch Linux:
+            scp wcnss.* alarm@<IP>:/home/alarm/
+            scp WCNSS_qcom_wlan_nv.bin alarm@<IP>:/home/alarm/
+            # Luego via SSH en la tablet:
             sudo mkdir -p /lib/firmware/qcom /lib/firmware/wlan/prima
             sudo mv wcnss.* /lib/firmware/qcom/
-            sudo mv WCNSS_qcom_* /lib/firmware/wlan/prima/
+            sudo mv WCNSS_qcom_wlan_nv.bin /lib/firmware/wlan/prima/
             sudo modprobe wcn36xx
 
           ════════════════
           ERRORES COMUNES
           ════════════════
-          "4xxx < 6xxx" en Heimdall:
-            La imagen raw es más grande que la partición SYSTEM.
-            Usar fastboot en vez de Heimdall (fastboot maneja sparse).
-            O regenerar imagen con tamaño más pequeño.
+          "Not enough space to flash":
+            La imagen es más grande que USERDATA.
+            Verificar: ls -lh alarm-matisse3g-rootfs.img
+            USERDATA en SM-T531 es ~12GB, debería sobrar.
 
-          "Failed to confirm end of file transfer":
-            Problema de cable USB o la tablet salió de Download Mode.
-            Usar fastboot en vez de Heimdall, o probar otro cable/puerto.
-
-          lk2nd muestra "unknow fixme!":
-            lk2nd demasiado viejo. Usar v23.0+ que tiene soporte SM-T531.
-
-          Pantalla negra después de flash:
-            Verificar que extlinux.conf esté en /extlinux/extlinux.conf
-            y que el kernel (zImage) y DTBs estén en /boot/
+          Pantalla negra:
+            Verificar lk2nd v23+ en BOOT.
+            Fastboot log: fastboot oem log
           FLASH
 
           # ── Create archive ──
@@ -382,30 +367,25 @@ jobs:
           ls -lh
           cd ..
 
+      - name: Compute release tag
+        id: reletag
+        run: echo "tag=v$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: "alarm-matisse3g ${{ env.RELEASE_TAG }}"
+          tag_name: ${{ steps.reletag.outputs.tag }}
+          name: "alarm-matisse3g ${{ steps.reletag.outputs.tag }}"
           body: |
             # 🥭 alarm-matisse3g Build
 
             **Kernel:** ${{ env.KERNEL_REF }}
             **lk2nd:** ${{ env.LK2ND_TAG }}
             **Rootfs:** Arch Linux ARM armv7h
-            
-            ## Contenido
-            - `lk2nd-msm8226.img` — bootloader secundario (flash una vez)
-            - `alarm-matisse3g-rootfs.img` — sistema completo listo para SYSTEM
-            
-            ## WiFi
-            wcn36xx driver incluido. Firmware no redistribuible — extraer de Android stock:
-            - `/system/vendor/firmware/wlan/prima/WCNSS_qcom_wlan_nv.bin`
-            - `/system/vendor/firmware/wlan/prima/WCNSS_qcom_cfg.ini`
-            - `/system/vendor/firmware/wcnss.*`
-            
+
             ## Flasheo
-            Ver FLASH.txt en el release package.
+            fastboot flash userdata alarm-matisse3g-rootfs.img
+            fastboot erase system
+            fastboot reboot
           files: |
             release/lk2nd-msm8226.img
             release/alarm-matisse3g-rootfs.img
