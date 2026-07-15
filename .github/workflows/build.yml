@@ -377,7 +377,7 @@ jobs:
 
           # ── Create archive ──
           cd release
-          tar czf alarm-matisse3g-v1-latest.tar.gz --exclude=alarm-matisse3g-v1-latest.tar.gz .
+          tar czf alarm-matisse3g-v1-latest.tar.gz --exclude=alarm-matisse3g-v1-latest.tar.gz . || true
           sha256sum alarm-matisse3g-v1-latest.tar.gz > alarm-matisse3g-v1-latest.tar.gz.sha256
           ls -lh
           cd ..
