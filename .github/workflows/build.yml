@@ -266,11 +266,9 @@ jobs:
             " || {
               echo "⚠️ mkinitcpio failed, trying with minimal config..."
               # Fallback: create minimal initramfs manually
-              echo "MODULES=()
-BINARIES=()
-FILES=()
-HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)" | \
-              sudo tee rootfs/etc/mkinitcpio-matisse.conf
+              # All on one line to avoid YAML indentation breakage
+              echo 'MODULES=() BINARIES=() FILES=() HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)' | \
+              tr ' ' '\n' | sudo tee rootfs/etc/mkinitcpio-matisse.conf
               sudo arch-chroot rootfs /bin/bash -c "
                 mkinitcpio -k $KVER -g /boot/initramfs-linux.img \
                   -c /etc/mkinitcpio-matisse.conf 2>&1
