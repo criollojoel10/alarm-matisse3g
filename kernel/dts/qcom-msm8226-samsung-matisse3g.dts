@@ -5,7 +5,7 @@
 
 / {
 	model = "Samsung Galaxy Tab 4 10.1 3G";
-	compatible = "samsung,matisse3g", "qcom,msm8226";
+	compatible = "samsung,matisse-wifi", "samsung,matisse3g", "qcom,msm8226";
 	chassis-type = "tablet";
 
 	reg_tsp_3p3v: regulator-tsp-3p3v {

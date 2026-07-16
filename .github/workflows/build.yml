@@ -63,19 +63,35 @@ jobs:
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- qcom_defconfig
 
           # ── Absolute minimum: WiFi, BT, filesystem ──
+          # ── WiFi: wcn36xx dependencies ──
+          ./scripts/config --enable CONFIG_ATH_CARDS
+          ./scripts/config --enable CONFIG_ATH_COMMON
+          ./scripts/config --module CONFIG_ATH
           ./scripts/config --module CONFIG_WCN36XX
+          ./scripts/config --enable CONFIG_WCN36XX_DEBUGFS
           ./scripts/config --enable CONFIG_QCOM_WCNSS_CTRL
           ./scripts/config --enable CONFIG_QCOM_WCNSS_PIL
-          ./scripts/config --module CONFIG_BT_HCIUART
-          ./scripts/config --enable CONFIG_BT_HCIUART_BCM
           ./scripts/config --enable CONFIG_CFG80211
           ./scripts/config --module CONFIG_MAC80211
           ./scripts/config --enable CONFIG_RFKILL
+          ./scripts/config --enable CONFIG_RFKILL_GPIO
+
+          # ── Bluetooth ──
+          ./scripts/config --module CONFIG_BT
+          ./scripts/config --module CONFIG_BT_HCIUART
+          ./scripts/config --enable CONFIG_BT_HCIUART_BCM
+          ./scripts/config --enable CONFIG_BT_QCOMSMD
+
+          # ── Filesystem ──
           ./scripts/config --enable CONFIG_DEVTMPFS
           ./scripts/config --enable CONFIG_DEVTMPFS_MOUNT
           ./scripts/config --enable CONFIG_FW_LOADER
           ./scripts/config --enable CONFIG_EXT4_FS
           ./scripts/config --enable CONFIG_EXT4_USE_FOR_EXT2
+          ./scripts/config --enable CONFIG_EXT4_FS_POSIX_ACL
+          ./scripts/config --enable CONFIG_EXT4_FS_SECURITY
+
+          # ── Network drivers ──
           ./scripts/config --module CONFIG_USB_NET_DRIVERS
           ./scripts/config --module CONFIG_USB_USBNET
           ./scripts/config --module CONFIG_NETDEVICES
@@ -190,7 +206,8 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget fakeroot e2fsprogs android-sdk-libsparse-utils
+          sudo apt-get install -y wget fakeroot e2fsprogs android-sdk-libsparse-utils \
+            qemu-user-static binfmt-support arch-install-scripts
 
       - name: Download Arch Linux ARM rootfs
         run: |
@@ -225,6 +242,45 @@ jobs:
 
           # ── Fix permissions ──
           sudo chown -R root:root rootfs/etc 2>/dev/null || true
+
+      - name: Generate initramfs
+        run: |
+          # Get kernel version from modules dir
+          KVER=$(ls rootfs/lib/modules/ | grep -v '^7\.' | head -1)
+          if [ -z "$KVER" ]; then
+            # Fallback: extract from zImage
+            KVER=$(strings rootfs/boot/zImage 2>/dev/null | grep '^Linux version' | awk '{print $3}')
+          fi
+          echo "Kernel version: $KVER"
+          if [ -n "$KVER" ]; then
+            echo "==> Generating initramfs for kernel $KVER..."
+            # Register ARM binfmt if not already
+            sudo systemctl restart systemd-binfmt 2>/dev/null || true
+            # Ensure qemu-arm-static is available in chroot
+            sudo mkdir -p rootfs/usr/bin
+            sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+            # Run mkinitcpio via arch-chroot
+            sudo arch-chroot rootfs /bin/bash -c "
+              mkinitcpio -k $KVER -g /boot/initramfs-linux.img \
+                -c /etc/mkinitcpio.conf 2>&1
+            " || {
+              echo "⚠️ mkinitcpio failed, trying with minimal config..."
+              # Fallback: create minimal initramfs manually
+              echo "MODULES=()
+BINARIES=()
+FILES=()
+HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)" | \
+              sudo tee rootfs/etc/mkinitcpio-matisse.conf
+              sudo arch-chroot rootfs /bin/bash -c "
+                mkinitcpio -k $KVER -g /boot/initramfs-linux.img \
+                  -c /etc/mkinitcpio-matisse.conf 2>&1
+              " || echo "⚠️ mkinitcpio fallback also failed"
+            }
+            echo "Initramfs result:"
+            ls -lh rootfs/boot/initramfs-linux.img 2>/dev/null || echo "❌ No initramfs generated"
+          else
+            echo "❌ Could not determine kernel version"
+          fi
 
       - name: Create ext2 sparse image
         run: |
